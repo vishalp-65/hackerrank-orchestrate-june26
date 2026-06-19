@@ -1,0 +1,12 @@
+# Never commit local secrets (Azure AI Foundry / Anthropic keys live here)
+.claude/
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Perception cache (content-addressed; safe to delete/regenerate)
+code/.cache/
+
+# Note: output.csv and dataset/output.csv ARE deliverables — not ignored.
