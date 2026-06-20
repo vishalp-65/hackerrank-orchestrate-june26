@@ -8,7 +8,7 @@ from __future__ import annotations
 from . import config, schema
 from .data_loader import ClaimRow
 
-PROMPT_VERSION = config.PROMPT_VERSION
+PROMPT_VERSION = config.PROMPT_VERSION  # v5 — schema trim, NEI-cascade fix, distance-1 snapping
 
 _OBJECT_PART_LINES = "\n".join(
     f"  object_part ({obj}): {' | '.join(parts)}"
