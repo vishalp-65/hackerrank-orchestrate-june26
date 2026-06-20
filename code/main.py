@@ -26,7 +26,8 @@ from evidence_review.pipeline import run_pipeline
 def main() -> int:
     ap = argparse.ArgumentParser(description="Multi-Modal Evidence Review — generate output.csv")
     ap.add_argument("--model", default=config.DEFAULT_MODEL_KEY,
-                    help="opus | sonnet | haiku, or a full model id (default: opus)")
+                    help="opus | sonnet | haiku, or a full model id "
+                         f"(default from LLM_MODEL env: {config.DEFAULT_MODEL_KEY})")
     ap.add_argument("--workers", type=int, default=config.MAX_WORKERS)
     ap.add_argument("--no-cache", action="store_true", help="ignore the on-disk perception cache")
     ap.add_argument("--input", default=str(config.CLAIMS_CSV))
