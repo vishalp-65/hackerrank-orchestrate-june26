@@ -201,7 +201,9 @@ def build_report(results: list[dict], gold_dist: dict, n: int) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Evaluate + compare configurations on the sample set.")
-    ap.add_argument("--models", nargs="+", default=["opus", "sonnet"])
+    ap.add_argument("--models", nargs="+", default=[config.DEFAULT_MODEL_KEY],
+                    help="model keys/ids to evaluate (default: the configured LLM_MODEL). "
+                         "Pass multiple to compare, e.g. --models opus sonnet")
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()

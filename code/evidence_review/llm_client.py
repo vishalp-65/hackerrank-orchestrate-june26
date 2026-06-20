@@ -1,8 +1,10 @@
-"""Provider-agnostic Claude client + a forced-tool-use review call with retries.
+"""Provider-agnostic Claude client + a structured-review call with retries.
 
-Auto-detects the provider from the environment: Azure AI Foundry when
-``ANTHROPIC_FOUNDRY_API_KEY`` is set, otherwise the first-party API
-(``ANTHROPIC_API_KEY``). Secrets are read from the environment only.
+Auto-detects the provider from the environment, in priority order:
+  1. Azure AI Foundry (Anthropic-compatible) — ``ANTHROPIC_BASE_URL`` + ``ANTHROPIC_API_KEY``.
+  2. Foundry SDK helper — ``ANTHROPIC_FOUNDRY_API_KEY`` (+ ``ANTHROPIC_FOUNDRY_RESOURCE``).
+  3. First-party Anthropic API — ``ANTHROPIC_API_KEY`` alone.
+Secrets are read from the environment only (see code/.env / .env.example).
 """
 from __future__ import annotations
 
@@ -16,23 +18,41 @@ from . import config
 
 
 def make_client():
-    """Build an Anthropic client for whichever provider is configured."""
+    """Build an Anthropic client for whichever provider is configured.
+
+    Our own backoff loop (``call_review``) owns retries, so the SDK's client-level
+    retries are disabled (``max_retries=0``) to avoid compounding the two.
+    """
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if base_url and api_key:
+        # Anthropic-compatible endpoint (e.g. Azure AI Foundry's /anthropic route).
+        return anthropic.Anthropic(
+            api_key=api_key, base_url=base_url,
+            timeout=config.REQUEST_TIMEOUT, max_retries=0,
+        )
     if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY"):
         return anthropic.AnthropicFoundry(
             resource=os.environ["ANTHROPIC_FOUNDRY_RESOURCE"],
             api_key=os.environ["ANTHROPIC_FOUNDRY_API_KEY"],
-            timeout=config.REQUEST_TIMEOUT,
+            timeout=config.REQUEST_TIMEOUT, max_retries=0,
         )
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return anthropic.Anthropic(timeout=config.REQUEST_TIMEOUT)
+    if api_key:
+        return anthropic.Anthropic(timeout=config.REQUEST_TIMEOUT, max_retries=0)
     raise RuntimeError(
-        "No credentials found. Set ANTHROPIC_FOUNDRY_API_KEY (+ ANTHROPIC_FOUNDRY_RESOURCE) "
-        "or ANTHROPIC_API_KEY in the environment."
+        "No credentials found. Set ANTHROPIC_API_KEY (and ANTHROPIC_BASE_URL for an "
+        "Azure AI Foundry / Anthropic-compatible endpoint), or ANTHROPIC_FOUNDRY_API_KEY "
+        "(+ ANTHROPIC_FOUNDRY_RESOURCE)."
     )
 
 
 def provider_name() -> str:
-    return "foundry" if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY") else "anthropic"
+    base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+    if base_url:
+        return "azure-foundry" if "azure" in base_url.lower() else "anthropic-compatible"
+    if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY"):
+        return "foundry"
+    return "anthropic"
 
 
 _RETRYABLE = (
@@ -52,24 +72,36 @@ def _usage_dict(usage) -> dict:
     }
 
 
+def _request_kwargs(model, max_tokens, system_blocks, user_content, tool) -> dict:
+    """Build messages.create kwargs, honoring config.THINKING_ENABLED.
+
+    No ``temperature`` is ever sent (sampling params are rejected on Opus 4.8/4.7).
+    Thinking OFF (default): force the tool (``tool_choice=tool``) for a guaranteed
+    structured reply. Thinking ON: forcing a specific tool is disallowed with extended
+    thinking, so use ``tool_choice=auto`` and extract the tool_use block from the reply.
+    """
+    kw = dict(
+        model=model, max_tokens=max_tokens, system=system_blocks,
+        messages=[{"role": "user", "content": user_content}], tools=[tool],
+    )
+    if config.THINKING_ENABLED:
+        budget = max(1024, min(max_tokens - 512, max_tokens // 2))
+        kw["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        kw["tool_choice"] = {"type": "auto"}
+    else:
+        kw["tool_choice"] = {"type": "tool", "name": tool["name"]}
+    return kw
+
+
 def call_review(client, model: str, system_blocks: list, user_content: list, tool: dict,
                 max_tokens: int = config.MAX_TOKENS,
                 max_retries: int = config.MAX_RETRIES) -> tuple[dict, dict]:
-    """Make one forced ``submit_review`` call. Returns (perception, usage).
-
-    No ``temperature`` and no ``thinking`` are sent: sampling params are rejected on
-    Opus 4.8/4.7, and forced tool use is incompatible with extended thinking.
-    """
+    """Make one ``submit_review`` call. Returns (perception, usage)."""
     last_exc: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
             resp = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system_blocks,
-                messages=[{"role": "user", "content": user_content}],
-                tools=[tool],
-                tool_choice={"type": "tool", "name": tool["name"]},
+                **_request_kwargs(model, max_tokens, system_blocks, user_content, tool)
             )
             for block in resp.content:
                 if block.type == "tool_use" and block.name == tool["name"]:
