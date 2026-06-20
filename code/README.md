@@ -347,31 +347,47 @@ answers); each version is documented by `PROMPT_VERSION` and the calibration blo
 ```bash
 pip install -r code/requirements.txt          # anthropic, pillow, pillow-avif-plugin
 
-# credentials (read from environment only) - either:
-export ANTHROPIC_API_KEY=sk-ant-...
-# or Azure AI Foundry (auto-detected):
-export ANTHROPIC_FOUNDRY_API_KEY=...   ANTHROPIC_FOUNDRY_RESOURCE=your-resource
+# Credentials + tunables are read from the environment, and auto-loaded from code/.env
+# if present. Copy the template and fill it in (code/.env is gitignored):
+cp code/.env.example code/.env
 ```
+
+Set these in `code/.env` (or as real shell env vars, which take precedence):
+
+| Variable | Example | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | `8TGD…` | API key (required) |
+| `ANTHROPIC_BASE_URL` | `https://<res>.services.ai.azure.com/anthropic` | Azure AI Foundry endpoint; omit for first-party Anthropic |
+| `LLM_MODEL` | `claude-sonnet-4-6` | default model (key or full id) |
+| `LLM_MAX_TOKENS` | `4096` | output cap |
+| `LLM_TIMEOUT_SECONDS` | `60` | per-request timeout |
+| `LLM_MAX_RETRIES` | `4` | backoff retries |
+| `LLM_ENABLE_PROMPT_CACHE` | `true` | prompt caching on/off |
+| `LLM_THINKING_ENABLED` | `false` | extended thinking on/off |
 
 | Command | What it does |
 |---|---|
-| `python code/main.py` | Run all 44 test claims → `output.csv` (Opus 4.8, default) |
-| `python code/main.py --model sonnet --workers 4 --no-cache --limit 5` | Other model / no cache / first 5 rows |
-| `python code/evaluation/main.py --models opus sonnet` | Score + compare both models → `evaluation_report.md` |
+| `python code/main.py` | Run all 44 test claims → `output.csv` (model = `LLM_MODEL`) |
+| `python code/main.py --model opus --workers 4 --no-cache --limit 5` | Override model / no cache / first 5 rows |
+| `python code/evaluation/main.py` | Score the configured model on the 20 samples → `evaluation_report.md` |
+| `python code/evaluation/main.py --models opus sonnet` | Compare two models side by side |
 
 Outputs: `output.csv` (repo root, the submission; mirrored to `dataset/output.csv`) and
 `code/evaluation/evaluation_report.md`.
 
 ### Key configuration knobs (`evidence_review/config.py`)
 
-| Setting | Default | Meaning |
+| Setting | Source / default | Meaning |
 |---|---|---|
-| `DEFAULT_MODEL_KEY` | `opus` | primary model |
+| `DEFAULT_MODEL_KEY` | env `LLM_MODEL` → `claude-sonnet-4-6` | primary model |
+| `MAX_TOKENS` | env `LLM_MAX_TOKENS` → `4096` | output cap |
+| `MAX_RETRIES` | env `LLM_MAX_RETRIES` → `4` | backoff attempts |
+| `REQUEST_TIMEOUT` | env `LLM_TIMEOUT_SECONDS` → `60` | per-request timeout (s) |
+| `ENABLE_PROMPT_CACHE` | env `LLM_ENABLE_PROMPT_CACHE` → `true` | ephemeral prompt caching |
+| `THINKING_ENABLED` | env `LLM_THINKING_ENABLED` → `false` | extended thinking toggle |
 | `MAX_IMAGE_EDGE` | `1568` | downscale target (px) |
 | `MAX_WORKERS` | `4` | concurrent claims |
-| `MAX_RETRIES` | `5` | backoff attempts |
 | `PROMPT_VERSION` | `v4` | bump to invalidate caches |
-| `ENABLE_PROMPT_CACHE` | `True` | ephemeral prompt caching |
 
 ---
 
