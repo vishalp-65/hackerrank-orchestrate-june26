@@ -123,7 +123,7 @@ def normalize_enum(value: str, allowed: Iterable[str], fallback: str = "unknown"
     syn = _SYNONYMS.get(v)
     if syn in allowed:
         return syn
-    best, best_d = fallback, 3
+    best, best_d = fallback, 2  # only snap within distance-1; avoids roof→door, hole→none
     for cand in allowed:
         d = _levenshtein(v, cand)
         if d < best_d:
@@ -175,7 +175,7 @@ def build_tool() -> dict:
             "type": "object",
             "additionalProperties": False,
             "required": [
-                "extracted_claim_summary", "claimed_part", "text_instruction_detected",
+                "claimed_part", "text_instruction_detected",
                 "per_image_observations", "overall_visible_issue_type",
                 "overall_visible_object_part", "overall_severity", "claim_match_assessment",
                 "evidence_standard_assessment", "evidence_standard_reason",
@@ -203,7 +203,6 @@ def build_tool() -> dict:
                         "required": [
                             "image_id", "is_relevant", "is_original_photo", "quality_flags",
                             "visible_part", "visible_damage_type", "damage_visible",
-                            "supports_claim", "note",
                         ],
                         "properties": {
                             "image_id": {"type": "string", "description": "The given image label, e.g. img_1."},
@@ -215,14 +214,14 @@ def build_tool() -> dict:
                                 "description": "Issues that affect using this image as evidence.",
                             },
                             "visible_part": {"type": "string", "description": "The part actually visible in this image."},
-                            "visible_damage_type": {"type": "string", "description": f"Issue type visible in this image. Allowed: {', '.join(ISSUE_TYPE)}."},
+                            "visible_damage_type": {"type": "string", "enum": list(ISSUE_TYPE), "description": "Issue type visible in this image."},
                             "damage_visible": {"type": "boolean", "description": "Is any damage visible in this image?"},
                             "supports_claim": {"type": "boolean", "description": "Does this specific image support the user's claim?"},
                             "note": {"type": "string", "description": "1-2 sentence factual description of what is visible."},
                         },
                     },
                 },
-                "overall_visible_issue_type": {"type": "string", "description": f"Best overall visible issue type across images (what is SEEN, not claimed). Allowed: {', '.join(ISSUE_TYPE)}."},
+                "overall_visible_issue_type": {"type": "string", "enum": list(ISSUE_TYPE), "description": "Best overall visible issue type across images (what is SEEN, not claimed)."},
                 "overall_visible_object_part": {"type": "string", "description": f"Best overall visible/assessed part. Allowed by object — {part_help}."},
                 "overall_severity": {"type": "string", "enum": list(SEVERITY), "description": "none=no damage visible, low=minor/cosmetic, medium=moderate, high=severe/structural, unknown=cannot assess."},
                 "claim_match_assessment": {
