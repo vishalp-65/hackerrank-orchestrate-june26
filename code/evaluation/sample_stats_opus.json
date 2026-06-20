@@ -1,0 +1,23 @@
+{
+  "model": "claude-opus-4-8",
+  "provider": "foundry",
+  "n_claims": 20,
+  "n_api_calls": 20,
+  "n_cache_hits": 0,
+  "n_fallback_rows": 0,
+  "input_tokens": 40274,
+  "output_tokens": 15738,
+  "cache_read_tokens": 88111,
+  "cache_creation_tokens": 15549,
+  "images_processed": 29,
+  "images_missing": 0,
+  "format_counts": {
+    "JPEG": 18,
+    "WEBP": 6,
+    "PNG": 5
+  },
+  "wall_time_s": 55.4,
+  "latency_p50_s": 10.23,
+  "latency_p95_s": 12.92,
+  "est_cost_usd": 0.7361
+}

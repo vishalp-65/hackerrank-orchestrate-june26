@@ -64,7 +64,8 @@ def run_config(model_key: str, claims, golds, use_cache: bool) -> dict:
     diffs = metrics.disagreements(preds, golds, CMP_FIELDS)
     print(f"  composite={m['composite']:.3f}  claim_status_acc={m['claim_status_acc']:.3f}  "
           f"risk_f1={m['risk_flags_f1']:.3f}  est_cost=${sd['est_cost_usd']:.4f}")
-    return {"model_key": model_key, "model": model, "metrics": m, "diffs": diffs, "stats": sd}
+    return {"model_key": model_key, "model": model, "metrics": m, "diffs": diffs,
+            "stats": sd, "preds": preds, "golds": golds}
 
 
 def _fmt(x) -> str:
@@ -94,9 +95,9 @@ def build_report(results: list[dict], gold_dist: dict, n: int) -> str:
         ("risk_flags_exact", "risk_flags exact-match"),
         ("evidence_standard_met_acc", "evidence_standard_met acc"),
         ("valid_image_acc", "valid_image acc"),
-        ("issue_type_macro_f1", "issue_type macro-F1"),
-        ("object_part_macro_f1", "object_part macro-F1"),
-        ("severity_macro_f1", "severity macro-F1"),
+        ("issue_type_macro_f1", "issue_type macro-F1 (union labels)"),
+        ("object_part_macro_f1", "object_part macro-F1 (union labels)"),
+        ("severity_macro_f1", "severity macro-F1 (union labels)"),
         ("supporting_image_ids_exact", "supporting_image_ids exact"),
     ]
     L.append("| Metric | " + " | ".join(r["model_key"] for r in results) + " |")
@@ -125,6 +126,17 @@ def build_report(results: list[dict], gold_dist: dict, n: int) -> str:
     L.append(f"| risk_flags (micro-F1 / exact) | {wm['risk_flags_f1']:.3f} / {wm['risk_flags_exact']:.3f} |")
     L.append(f"| supporting_image_ids (F1 / exact) | {wm['supporting_image_ids_f1']:.3f} / {wm['supporting_image_ids_exact']:.3f} |\n")
 
+    # Confusion matrices for the two weakest fields
+    L.append(f"### Confusion matrices — {winner['model_key']}\n")
+    wp, wg = winner.get("preds", []), winner.get("golds", [])
+    if wp and wg:
+        for field_label in [("issue_type", "issue\\_type"), ("severity", "severity")]:
+            fkey, flabel = field_label
+            L.append(f"**{flabel}** (rows=gold, cols=pred):\n")
+            L.append(metrics.confusion_markdown(wp, wg, fkey))
+            L.append("")
+    L.append("")
+
     L.append(f"## 4. Error analysis — {winner['model_key']} ({len(winner['diffs'])} rows with diffs)\n")
     if not winner["diffs"]:
         L.append("No field-level disagreements with gold.\n")
@@ -142,27 +154,39 @@ def build_report(results: list[dict], gold_dist: dict, n: int) -> str:
              f"{config.MAX_IMAGE_EDGE}px long edge before sending.\n")
     for r in results:
         s = r["stats"]
+        no_cache_cost = s.get("est_cost_no_cache_usd", "n/a")
         L.append(f"### Sample run — {r['model']}")
         L.append(f"- Model calls: {s['n_api_calls']} (cache hits: {s['n_cache_hits']}); "
                  f"fallback rows: {s['n_fallback_rows']}")
         L.append(f"- Tokens — input {s['input_tokens']}, output {s['output_tokens']}, "
                  f"cache-read {s['cache_read_tokens']}, cache-write {s['cache_creation_tokens']}")
-        L.append(f"- Images processed: {s['images_processed']} (missing {s['images_missing']}); "
+        L.append(f"- Images processed: {s['images_processed']} "
+                 f"(missing {s['images_missing']}, undecodable {s.get('images_undecodable', 0)}); "
                  f"source formats: {s['format_counts']}")
-        L.append(f"- Est. cost: ${s['est_cost_usd']:.4f}; wall {s['wall_time_s']:.1f}s; "
+        L.append(f"- Est. cost: ${s['est_cost_usd']:.4f} "
+                 f"(without prompt-caching: ${no_cache_cost}); "
+                 f"wall {s['wall_time_s']:.1f}s; "
                  f"per-call latency p50 {s['latency_p50_s']:.1f}s / p95 {s['latency_p95_s']:.1f}s\n")
 
     if config.TEST_RUN_STATS.is_file():
         ts = json.loads(config.TEST_RUN_STATS.read_text(encoding="utf-8"))
+        no_cache_ts = ts.get("est_cost_no_cache_usd", "n/a")
         L.append("### Test run — actuals (dataset/claims.csv → output.csv)")
+        if ts.get("model") != winner["model"]:
+            L.append(f"> **NOTE:** production run used `{ts['model']}` ({ts['provider']}) "
+                     f"but eval winner is `{winner['model']}`. Numbers below reflect the actual "
+                     "production run that generated output.csv.")
         L.append(f"- Model: {ts['model']} ({ts['provider']}); claims: {ts['n_claims']}; "
                  f"API calls: {ts['n_api_calls']}; cache hits: {ts['n_cache_hits']}; "
                  f"fallbacks: {ts['n_fallback_rows']}")
         L.append(f"- Tokens — input {ts['input_tokens']}, output {ts['output_tokens']}, "
                  f"cache-read {ts['cache_read_tokens']}, cache-write {ts['cache_creation_tokens']}")
-        L.append(f"- Images processed: {ts['images_processed']} (missing {ts['images_missing']}); "
+        L.append(f"- Images processed: {ts['images_processed']} "
+                 f"(missing {ts['images_missing']}, undecodable {ts.get('images_undecodable', 0)}); "
                  f"formats: {ts['format_counts']}")
-        L.append(f"- Est. cost: ${ts['est_cost_usd']}; wall {ts['wall_time_s']}s; "
+        L.append(f"- Est. cost: ${ts['est_cost_usd']} "
+                 f"(without prompt-caching: ${no_cache_ts}); "
+                 f"wall {ts['wall_time_s']}s; "
                  f"latency p50 {ts['latency_p50_s']}s / p95 {ts['latency_p95_s']}s\n")
     else:
         s = winner["stats"]
@@ -182,8 +206,9 @@ def build_report(results: list[dict], gold_dist: dict, n: int) -> str:
              "inputs+prompt_version+model — re-runs and policy edits cost **zero** API calls; "
              "(2) **prompt caching** (ephemeral `cache_control`) on the static system+requirements "
              "prefix, served from cache after the first call (see cache-read tokens above).")
-    L.append(f"- **Retries:** exponential backoff with jitter on 429/timeout/5xx "
-             f"(up to {config.MAX_RETRIES} attempts); non-429 4xx surface immediately. A claim that "
+    L.append(f"- **Retries:** exponential backoff with jitter (honors `Retry-After` header on 429) — "
+             f"up to {config.MAX_RETRIES + 1} attempts ({config.MAX_RETRIES} retries); "
+             "non-429 4xx surface immediately. A claim that "
              "still fails is written as a safe not_enough_information fallback row so the batch completes.")
     L.append("- **Determinism:** no `temperature`/`thinking` (rejected on Opus 4.8); all policy is in "
              "the deterministic adjudicator, so output is reproducible from the cache.\n")

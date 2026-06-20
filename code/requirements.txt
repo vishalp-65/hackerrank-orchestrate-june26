@@ -1,6 +1,7 @@
 # Multi-Modal Evidence Review — runtime dependencies
-anthropic>=0.111          # Claude SDK (first-party + AnthropicFoundry for Azure AI Foundry)
-pillow>=10                # decode/resize/re-encode images
-pillow-avif-plugin>=1.4   # decode AVIF (8 test images are AVIF behind a .jpg name)
+# Python >=3.10 required (match-statement and | union annotations used in code).
+anthropic>=0.111,<1.0     # Claude SDK (first-party + AnthropicFoundry for Azure AI Foundry)
+pillow>=10,<12            # decode/resize/re-encode images
+pillow-avif-plugin>=1.4,<2  # decode AVIF (8 test images are AVIF behind a .jpg name)
 # pillow-heif is optional defensive insurance for HEIC inputs (none in this dataset):
-# pillow-heif>=0.16
+# pillow-heif>=0.16,<1
