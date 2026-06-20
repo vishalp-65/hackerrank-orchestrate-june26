@@ -71,7 +71,7 @@ def normalize_to_jpeg_b64(path: Path, max_edge: int = config.MAX_IMAGE_EDGE,
             if longest > max_edge:
                 scale = max_edge / float(longest)
                 im = im.resize((max(1, round(w * scale)), max(1, round(h * scale))),
-                               Image.LANCZOS)
+                               Image.Resampling.LANCZOS)
             out_w, out_h = im.size
             buf = io.BytesIO()
             im.save(buf, format="JPEG", quality=quality, optimize=True)

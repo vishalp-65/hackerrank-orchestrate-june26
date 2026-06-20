@@ -8,6 +8,7 @@ Secrets are read from the environment only (see code/.env / .env.example).
 """
 from __future__ import annotations
 
+import email.utils
 import os
 import random
 import time
@@ -93,6 +94,31 @@ def _request_kwargs(model, max_tokens, system_blocks, user_content, tool) -> dic
     return kw
 
 
+def _retry_delay(exc: Exception, attempt: int) -> float:
+    """Respect Retry-After on 429; fall back to exponential backoff with jitter."""
+    resp = getattr(exc, "response", None)
+    if resp is not None and isinstance(exc, anthropic.RateLimitError):
+        headers = getattr(resp, "headers", {}) or {}
+        raw = headers.get("retry-after") or headers.get("retry-after-ms")
+        if raw:
+            try:
+                # retry-after-ms takes priority
+                if headers.get("retry-after-ms"):
+                    after = float(raw) / 1000.0
+                else:
+                    after = float(raw)
+            except ValueError:
+                # HTTP-date format fallback
+                try:
+                    parsed = email.utils.parsedate_to_datetime(raw)
+                    after = max(0.0, parsed.timestamp() - time.time())
+                except Exception:
+                    after = None
+            if after is not None and 0 < after <= 60:
+                return after
+    return min(60.0, (2 ** attempt) + random.uniform(0, 1))
+
+
 def call_review(client, model: str, system_blocks: list, user_content: list, tool: dict,
                 max_tokens: int = config.MAX_TOKENS,
                 max_retries: int = config.MAX_RETRIES) -> tuple[dict, dict]:
@@ -111,7 +137,7 @@ def call_review(client, model: str, system_blocks: list, user_content: list, too
             last_exc = exc
             if attempt >= max_retries:
                 break
-            delay = min(60.0, (2 ** attempt) + random.uniform(0, 1))
+            delay = _retry_delay(exc, attempt)
             time.sleep(delay)
         except anthropic.APIStatusError as exc:
             # Retry only on server-side 5xx; surface 4xx (other than 429) immediately.
@@ -119,7 +145,7 @@ def call_review(client, model: str, system_blocks: list, user_content: list, too
                 last_exc = exc
                 if attempt >= max_retries:
                     break
-                time.sleep(min(60.0, (2 ** attempt) + random.uniform(0, 1)))
+                time.sleep(_retry_delay(exc, attempt))
             else:
                 raise
     raise RuntimeError(f"call_review exhausted retries: {last_exc!r}") from last_exc

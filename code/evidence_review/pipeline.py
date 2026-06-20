@@ -5,6 +5,7 @@ written as a safe not_enough_information fallback row rather than aborting the b
 """
 from __future__ import annotations
 
+import sys
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,7 +15,7 @@ from . import cache, config, prompts, schema
 from .adjudicator import adjudicate, fallback_row
 from .data_loader import (ClaimRow, default_history, load_evidence_requirements,
                           load_user_history, relevant_requirements)
-from .image_utils import normalize_to_jpeg_b64
+from .image_utils import _AVIF_OK, normalize_to_jpeg_b64
 from .llm_client import call_review, provider_name
 
 
@@ -32,9 +33,11 @@ class RunStats:
     cache_creation_tokens: int = 0
     images_processed: int = 0
     images_missing: int = 0
+    images_undecodable: int = 0
     format_counts: Counter = field(default_factory=Counter)
     latencies: list[float] = field(default_factory=list)
     wall_time_s: float = 0.0
+    sample_errors: list[str] = field(default_factory=list)
 
     def cost_usd(self) -> float:
         # Anthropic cache economics: fresh input 1.0x, cache write 1.25x, cache read 0.1x.
@@ -48,6 +51,9 @@ class RunStats:
         lat = sorted(self.latencies)
         p50 = lat[len(lat) // 2] if lat else 0.0
         p95 = lat[min(int(len(lat) * 0.95), len(lat) - 1)] if lat else 0.0
+        pin, pout = config.PRICING.get(self.model, (0.0, 0.0))
+        raw_input = self.input_tokens + self.cache_creation_tokens + self.cache_read_tokens
+        cost_no_cache = (raw_input * pin + self.output_tokens * pout) / 1_000_000
         return {
             "model": self.model, "provider": self.provider, "n_claims": self.n_claims,
             "n_api_calls": self.n_api_calls, "n_cache_hits": self.n_cache_hits,
@@ -55,9 +61,11 @@ class RunStats:
             "output_tokens": self.output_tokens, "cache_read_tokens": self.cache_read_tokens,
             "cache_creation_tokens": self.cache_creation_tokens,
             "images_processed": self.images_processed, "images_missing": self.images_missing,
+            "images_undecodable": self.images_undecodable,
             "format_counts": dict(self.format_counts), "wall_time_s": round(self.wall_time_s, 2),
             "latency_p50_s": round(p50, 2), "latency_p95_s": round(p95, 2),
             "est_cost_usd": round(self.cost_usd(), 4),
+            "est_cost_no_cache_usd": round(cost_no_cache, 4),
         }
 
 
@@ -74,28 +82,29 @@ class _Ctx:
 
 
 def _load_images(claim: ClaimRow):
-    images, missing_ids, src_formats = [], [], []
+    images, missing_ids, undecodable_ids, src_formats = [], [], [], []
     for image_id, path, exists in claim.images:
         if not exists:
             missing_ids.append(image_id)
             continue
         norm = normalize_to_jpeg_b64(path)
         if norm is None:
-            missing_ids.append(image_id)
+            undecodable_ids.append(image_id)
             continue
         norm["image_id"] = image_id
         images.append(norm)
         src_formats.append(norm["src_format"])
-    return images, missing_ids, src_formats
+    return images, missing_ids, undecodable_ids, src_formats
 
 
 def _process(claim: ClaimRow, ctx: _Ctx) -> tuple[dict, dict]:
     """Returns (output_row, meta). Never raises — failures become fallback rows."""
     history = ctx.history_map.get(claim.user_id) or default_history(claim.user_id)
     meta = {"cache_hit": False, "api_call": False, "latency": 0.0,
-            "images": 0, "missing": 0, "src_formats": [], "usage": None, "error": None}
+            "images": 0, "missing": 0, "undecodable": 0,
+            "src_formats": [], "usage": None, "error": None}
 
-    key = cache.cache_key(claim, ctx.prompt_version, ctx.model)
+    key = cache.cache_key(claim, ctx.prompt_version, ctx.model, history)
     cached = cache.load(key) if ctx.use_cache else None
 
     try:
@@ -105,13 +114,15 @@ def _process(claim: ClaimRow, ctx: _Ctx) -> tuple[dict, dict]:
             meta["src_formats"] = cached.get("src_formats", [])
             meta["images"] = len(loaded_ids)
             meta["missing"] = cached.get("missing", 0)
+            meta["undecodable"] = cached.get("undecodable", 0)
             meta["cache_hit"] = True
         else:
-            images, missing_ids, src_formats = _load_images(claim)
+            images, missing_ids, undecodable_ids, src_formats = _load_images(claim)
             loaded_ids = [img["image_id"] for img in images]
             relevant = relevant_requirements(ctx.reqs, claim.claim_object)
+            all_bad = missing_ids + undecodable_ids
             user_content = prompts.build_user_content(
-                claim, history, relevant, images, missing_ids)
+                claim, history, relevant, images, all_bad)
             t0 = time.perf_counter()
             perception, usage = call_review(
                 ctx.client, ctx.model, ctx.system_blocks, user_content, ctx.tool)
@@ -120,10 +131,15 @@ def _process(claim: ClaimRow, ctx: _Ctx) -> tuple[dict, dict]:
             meta["usage"] = usage
             meta["images"] = len(images)
             meta["missing"] = len(missing_ids)
+            meta["undecodable"] = len(undecodable_ids)
             meta["src_formats"] = src_formats
             if ctx.use_cache:
-                cache.save(key, {"perception": perception, "loaded_image_ids": loaded_ids,
-                                 "src_formats": src_formats, "missing": len(missing_ids)})
+                cache.save(key, {
+                    "perception": perception, "loaded_image_ids": loaded_ids,
+                    "src_formats": src_formats, "missing": len(missing_ids),
+                    "undecodable": len(undecodable_ids),
+                    "prompt_version": ctx.prompt_version, "model": ctx.model,
+                })
         row = adjudicate(perception, history, claim, loaded_ids)
         return row, meta
     except Exception as exc:  # noqa: BLE001 — robustness: never abort the batch
@@ -136,13 +152,26 @@ def run_pipeline(claims: list[ClaimRow], *, model: str, use_cache: bool = True,
                  prompt_version: str = config.PROMPT_VERSION,
                  client=None, progress: bool = True) -> tuple[list[dict], RunStats]:
     from .llm_client import make_client
+
+    if not _AVIF_OK:
+        avif_claims = [c for c in claims
+                       if any(str(p).lower().endswith(".jpg") for _, p, exists in c.images if exists)]
+        print(
+            "WARNING: AVIF decoder (pillow-avif-plugin) unavailable. "
+            "AVIF images disguised as .jpg will fail to decode and those claims "
+            "will degrade to not_enough_information. "
+            "Install pillow-avif-plugin to fix this.",
+            file=sys.stderr,
+        )
+
+    reqs = load_evidence_requirements()  # load once; reused by build_system and per-claim filter
     ctx = _Ctx(
         client=client or make_client(),
         model=model,
-        system_blocks=prompts.build_system(load_evidence_requirements()),
+        system_blocks=prompts.build_system(reqs),
         tool=schema.build_tool(),
         history_map=load_user_history(),
-        reqs=load_evidence_requirements(),
+        reqs=reqs,
         use_cache=use_cache,
         prompt_version=prompt_version,
     )
@@ -160,6 +189,8 @@ def run_pipeline(claims: list[ClaimRow], *, model: str, use_cache: bool = True,
             # accumulate stats (single thread here)
             if meta["error"]:
                 stats.n_fallback_rows += 1
+                if len(stats.sample_errors) < 5:
+                    stats.sample_errors.append(meta["error"])
             if meta["cache_hit"]:
                 stats.n_cache_hits += 1
             if meta["api_call"]:
@@ -172,6 +203,7 @@ def run_pipeline(claims: list[ClaimRow], *, model: str, use_cache: bool = True,
                 stats.cache_creation_tokens += u.get("cache_creation_input_tokens", 0)
             stats.images_processed += meta["images"]
             stats.images_missing += meta["missing"]
+            stats.images_undecodable += meta["undecodable"]
             stats.format_counts.update(meta["src_formats"])
             done += 1
             if progress:
