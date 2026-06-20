@@ -1,0 +1,27 @@
+{
+  "model": "claude-sonnet-4-6",
+  "provider": "azure-foundry",
+  "n_claims": 44,
+  "n_api_calls": 41,
+  "n_cache_hits": 3,
+  "n_fallback_rows": 0,
+  "input_tokens": 86122,
+  "output_tokens": 30691,
+  "cache_read_tokens": 150716,
+  "cache_creation_tokens": 0,
+  "images_processed": 82,
+  "images_missing": 0,
+  "images_undecodable": 0,
+  "format_counts": {
+    "JPEG": 49,
+    "AVIF": 8,
+    "WEBP": 11,
+    "PNG": 14
+  },
+  "wall_time_s": 88.16,
+  "latency_p50_s": 15.34,
+  "latency_p95_s": 18.7,
+  "est_cost_usd": 0.7639,
+  "est_cost_no_cache_usd": 1.1709,
+  "timestamp": "2026-06-20T10:18:26"
+}

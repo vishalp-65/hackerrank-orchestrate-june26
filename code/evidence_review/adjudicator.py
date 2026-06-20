@@ -39,12 +39,16 @@ def adjudicate(perception: dict, history: dict, claim: ClaimRow,
 
     # ── evidence_standard_met ────────────────────────────────────────────────
     evidence_met = bool(perception.get("evidence_standard_assessment"))
-    if obs and not any(o.get("is_relevant") for o in obs):
+    # Compute status first so the all-irrelevant override doesn't collapse a
+    # valid 'contradicted' verdict (wrong_object / non_original / mismatch) to
+    # NEI — the prompt explicitly instructs the model to set
+    # evidence_standard_assessment=true for all four contradicted cases.
+    claim_status_raw = schema.normalize_claim_status(perception.get("claim_status_raw"))
+    if obs and not any(o.get("is_relevant") for o in obs) and claim_status_raw != "contradicted":
         evidence_met = False
     if not loaded:
         evidence_met = False
 
-    claim_status_raw = schema.normalize_claim_status(perception.get("claim_status_raw"))
     is_nei = (not evidence_met) or (claim_status_raw == "not_enough_information")
 
     # ── valid_image (authenticity only) ──────────────────────────────────────
@@ -77,7 +81,7 @@ def adjudicate(perception: dict, history: dict, claim: ClaimRow,
             if not ids:
                 ids = [o.get("image_id") for o in obs
                        if o.get("image_id") in loaded and o.get("is_relevant")]
-        ids = sorted({i for i in ids if i}, key=_img_sort_key)
+        ids = sorted(dict.fromkeys(i for i in ids if i), key=lambda x: (_img_sort_key(x), x))
         supporting = ";".join(ids) if ids else "none"
 
     # ── risk_flags (depends on the final claim_status) ───────────────────────

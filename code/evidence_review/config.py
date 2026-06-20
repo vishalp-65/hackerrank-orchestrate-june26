@@ -98,17 +98,17 @@ PRICING = {
 }
 
 # ── Tunables ─────────────────────────────────────────────────────────────────
-PROMPT_VERSION = "v4"          # v4: precise 4-case contradicted def + authenticity/crack/severity calibration
-MAX_IMAGE_EDGE = 1568          # downscale longest edge (px) — caps image-token cost
+PROMPT_VERSION = "v5"          # v5: NEI-cascade fix, schema trim, distance-1 snapping, image-param cache key
 JPEG_QUALITY = 85              # re-encode quality for normalized images
-MAX_WORKERS = 4                # bounded concurrency (provider rate-limit friendly)
 
-# Env-overridable LLM knobs (see code/.env and code/.env.example).
+# Env-overridable pipeline knobs (see code/.env and code/.env.example).
+MAX_IMAGE_EDGE = _env_int("LLM_MAX_IMAGE_EDGE", 1568)  # downscale longest edge (px); must also be in cache key
+MAX_WORKERS = _env_int("LLM_MAX_WORKERS", 8)            # bounded concurrency — raise if provider RPM allows
 ENABLE_PROMPT_CACHE = _env_bool("LLM_ENABLE_PROMPT_CACHE", True)   # ephemeral cache_control on system prompt
 THINKING_ENABLED = _env_bool("LLM_THINKING_ENABLED", False)       # extended thinking (forces tool_choice=auto)
 MAX_TOKENS = _env_int("LLM_MAX_TOKENS", 4096)                     # output cap for the structured tool response
 MAX_RETRIES = _env_int("LLM_MAX_RETRIES", 4)                      # exponential-backoff retries on 429 / 5xx
-REQUEST_TIMEOUT = _env_float("LLM_TIMEOUT_SECONDS", 60.0)         # seconds per request
+REQUEST_TIMEOUT = _env_float("LLM_TIMEOUT_SECONDS", 30.0)         # seconds per request (tighter tail cap)
 
 
 def model_id(key_or_id: str) -> str:
